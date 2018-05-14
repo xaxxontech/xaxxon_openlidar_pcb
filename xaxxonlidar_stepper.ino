@@ -54,6 +54,7 @@ volatile unsigned long lastrev = 0;
 volatile unsigned long delayreadtime = 0;
 volatile long lastcycle = 0;
 int maxcount = 0;
+volatile unsigned long lastLidarRead = 0;
 
 // motor speed
 int rpm = 180; // default
@@ -230,7 +231,7 @@ void outputDistance() {
 	
 }
 
-void outputScanHeader() {
+void outputScanHeader(unsigned long now) {
 	
 	/* avoids output/read +/-1 count mismatch */
 	// if (distanceMeasureStarted && !isBusy) { // in the middle of data point ouput
@@ -238,7 +239,7 @@ void outputScanHeader() {
 		// return;
 	// }
 	
-	uint8_t header[10];
+	uint8_t header[12];
 	
 	/* send header code */
 	header[0]=(0xFF);
@@ -257,11 +258,11 @@ void outputScanHeader() {
 	header[9] = (lastcycle >> 24);
 	
 	/* send offset to last distance */
-	// unsigned int lastDistanceOffset = time - lastLidarRead;
-	// header[6] = lastDistanceOffset & 0xff;
-	// header[7] = (lastDistanceOffset >> 8);
+	unsigned int lastDistanceOffset = now - lastLidarRead;
+	header[10] = lastDistanceOffset & 0xff;
+	header[11] = (lastDistanceOffset >> 8);
 
-	if (!verbose)   Serial.write(header, 10);
+	if (!verbose)   Serial.write(header, 12);
 	
 	// else Serial.println(lastcycle);
 	
@@ -280,7 +281,7 @@ void trackRPM() {
 	disableInterrupts();
 
 	// if (photoblocked) return; // just in case
-	
+
 	unsigned long now = micros();
 
 	lastcycle = now - lastrev;
@@ -293,7 +294,7 @@ void trackRPM() {
 	photoblocked = true;
 	timeToPhotoUnblockedCheck = time + photoUnblockedCheckInterval;
 	
-	if (lidarBroadcast)  outputScanHeader();
+	if (lidarBroadcast)  outputScanHeader(now);
 	
 
 	// if (verbose) {
@@ -317,6 +318,7 @@ void readLidar() {
 		else 
 			distanceMeasureStart(false);
 		distanceMeasureStarted = true;
+		
 	}
 	
 	// wait
@@ -330,8 +332,10 @@ void readLidar() {
 		outputDistance();
 		distanceMeasureStarted = false;
 		
+		lastLidarRead = time;
+		
 		if (delayedOutputScanHeader) {
-			outputScanHeader();
+			outputScanHeader(time);
 			delayedOutputScanHeader = false;
 		}
 	}
@@ -523,5 +527,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.913>"); 
+	Serial.println("<version:0.915>"); 
 }
