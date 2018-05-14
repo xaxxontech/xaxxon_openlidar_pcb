@@ -45,16 +45,21 @@ int commandSize = 0;
 // rpm tracking
 volatile boolean photoblocked = false;
 volatile long timeToPhotoUnblockedCheck = 0;
-const long photoUnblockedCheckInterval = 150000; // approx 1/2 turn minimum should be OK
+long photoUnblockedCheckInterval = 0; // approx 1/2 turn minimum should be OK
 long waitingForStop = 0;
 boolean motorspinning = false;
 const long WAITFORSTOPDELAY = 1500000;
 int rev = 0; // used by verbose/debug only 
+volatile unsigned long lastrev = 0;
+volatile unsigned long delayreadtime = 0;
+volatile long lastcycle = 0;
+int maxcount = 0;
 
 // motor speed
 int rpm = 180; // default
 const int MICROSTEPS = 32;
 const int STEPSPERREV = 48;
+long cycle = 0;
 
 // distance output
 boolean lidarBroadcast = false;
@@ -69,7 +74,7 @@ boolean distanceMeasureStarted = false;
 // timed distance readi OUTPUT); 
 	// digitalWrite(ng
 unsigned long lidarReadyTime = 0;
-const long LIDARDELAY = 1400; // read frequency microseconds
+const long LIDARDELAY = 1400; // read period microseconds
 const int BIASCORRECTIONCOUNT = 200;
 boolean lidarenabled = true;
 
@@ -109,37 +114,24 @@ void setup() {
 	myLidarLite.write(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
 	// myLidarLite.write(0x04, 0b00000100); // Use non-default reference acquisition count
 	// myLidarLite.write(0x12, 0x03); // Reference acquisition count of 3 (default is 5)
+	
+	delay(100);
+	lidarDisable();
 
 	Serial.begin(115200);
 	Serial.println("<reset>");
 	
 	lasthostresponse = micros();
+	
+	setRPM(rpm); // defines cycle
+	
 }
 	
 void loop(){
 	
 	time = micros();
 	
-	if (lidarBroadcast) { 
-		if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
-			lidarReadyTime = time + LIDARDELAY;	
-			if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
-			else distanceMeasureStart(false);
-			distanceMeasureStarted = true;
-		}
-		else if (distanceMeasureStarted && isBusy) {
-			distanceWait();
-		}
-		else if (distanceMeasureStarted && !isBusy) {			
-			distanceGet();  			
-			outputDistance();
-			distanceMeasureStarted = false;
-			if (delayedOutputScanHeader) {
-				outputScanHeader();
-				delayedOutputScanHeader = false;
-			}
-		}
-	}
+	if (lidarBroadcast) readLidar();
 
 	if (photoblocked) {
 		if (time >= timeToPhotoUnblockedCheck && motorspinning) {
@@ -194,7 +186,7 @@ void parseCommand(){
 	else if (buffer[0] == 'g') goMotor(); 
 	
 	else if(buffer[0] == 'p') stopMotorFacingForward();
-	else if(buffer[0] == 'r') rpm = buffer[1];
+	else if(buffer[0] == 'r') setRPM(buffer[1]);
 	else if (buffer[0] == 'd') digitalWrite(DIRPIN, buffer[1]); // 0 or 1
 	
 	else if (buffer[0] == '1') { lidarEnable(); }
@@ -213,6 +205,8 @@ void parseCommand(){
 	else if (buffer[0] == 'a') allOn();
 
 }
+
+
 
 void outputDistance() {
 											
@@ -238,12 +232,13 @@ void outputDistance() {
 
 void outputScanHeader() {
 	
-	if (distanceMeasureStarted && !isBusy) { // in the middle of data point ouput
-		delayedOutputScanHeader = true;
-		return;
-	}
+	/* avoids output/read +/-1 count mismatch */
+	// if (distanceMeasureStarted && !isBusy) { // in the middle of data point ouput
+		// delayedOutputScanHeader = true;
+		// return;
+	// }
 	
-	uint8_t header[6];
+	uint8_t header[10];
 	
 	/* send header code */
 	header[0]=(0xFF);
@@ -254,9 +249,21 @@ void outputScanHeader() {
 	/* send count */
 	header[4] = count & 0xff;
 	header[5] = (count >> 8);
+	
+	/* send last cycle microseconds */
+	header[6] = lastcycle & 0xff;
+	header[7] = (lastcycle >> 8);
+	header[8] = (lastcycle >> 16);
+	header[9] = (lastcycle >> 24);
+	
+	/* send offset to last distance */
+	// unsigned int lastDistanceOffset = time - lastLidarRead;
+	// header[6] = lastDistanceOffset & 0xff;
+	// header[7] = (lastDistanceOffset >> 8);
 
-	if (!verbose) Serial.write(header, 6);
-	else Serial.println(count);
+	if (!verbose)   Serial.write(header, 10);
+	
+	// else Serial.println(lastcycle);
 	
 	// Serial.print("count: ");
 	// Serial.println(count);
@@ -272,18 +279,64 @@ void trackRPM() {
 	
 	disableInterrupts();
 
-	// if (photoblocked) return; // just in case	
+	// if (photoblocked) return; // just in case
+	
+	unsigned long now = micros();
+
+	lastcycle = now - lastrev;
+
+	if (verbose)  Serial.println(lastcycle);
+	
+	lastrev = now;
+	delayreadtime = lastrev + cycle - (LIDARDELAY*3);
 		
 	photoblocked = true;
-	if (lidarBroadcast) outputScanHeader();
 	timeToPhotoUnblockedCheck = time + photoUnblockedCheckInterval;
 	
-	if (verbose) {
-		Serial.print("rev: ");
-		Serial.println(rev);
-		rev ++;
-	}
+	if (lidarBroadcast)  outputScanHeader();
+	
+
+	// if (verbose) {
+		// Serial.print("rev: ");
+		// Serial.println(rev);
+		// rev ++;
+	// }
+	
 }
+
+void readLidar() {
+	
+	// start: request lidar data
+	if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
+		
+		if (time > delayreadtime & motorspinning) return;
+		// if (count >= maxcount) return;
+		
+		lidarReadyTime = time + LIDARDELAY;	
+		if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
+		else 
+			distanceMeasureStart(false);
+		distanceMeasureStarted = true;
+	}
+	
+	// wait
+	else if (distanceMeasureStarted && isBusy) {
+		distanceWait();
+	}
+	
+	// read lidar data
+	else if (distanceMeasureStarted && !isBusy) {			
+		distanceGet();  			
+		outputDistance();
+		distanceMeasureStarted = false;
+		
+		if (delayedOutputScanHeader) {
+			outputScanHeader();
+			delayedOutputScanHeader = false;
+		}
+	}
+	
+}	
 
 void goMotor() {
 	motorsEnable();
@@ -401,13 +454,13 @@ int distanceGet() {
 	
 }
 
-// TODO: unused, may cause noisier scans/affects gmapping
+// TODO: use top 2 lines if unused, may cause noisier scans/affects gmapping
 byte readIfAvailable() {
 	byte b = Wire.read(); 
 	return b;
 	
 	unsigned long m = 0;
-	while (m < 1000000) { // 1 second timeout
+	while (m < 10000) { // 0.1 second timeout
 		if (Wire.available()) {
 			byte b = Wire.read();
 			return b;
@@ -415,6 +468,7 @@ byte readIfAvailable() {
 		delayMicroseconds(1);
 		m ++;
 	}
+	
 	// timed out
 	
 	// if (timedout < MAXTIMEOUTS) {
@@ -450,6 +504,13 @@ unsigned int frequencyFromRPM(int rpm) {
 	return freq;
 }
 
+void setRPM(int n) {
+	rpm = n;
+	cycle = (60.0/(float) rpm) * 1000000;
+	maxcount = cycle/LIDARDELAY -3;
+	photoUnblockedCheckInterval = cycle/2;
+}
+
 void toggleVerbose() {
 	if (verbose) {
 		Serial.println("verbose off");
@@ -462,5 +523,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.897>"); 
+	Serial.println("<version:0.913>"); 
 }
