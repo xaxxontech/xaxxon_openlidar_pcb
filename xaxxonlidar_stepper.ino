@@ -239,7 +239,7 @@ void outputScanHeader(unsigned long now) {
 		// return;
 	// }
 	
-	uint8_t header[12];
+	uint8_t header[10];
 	
 	/* send header code */
 	header[0]=(0xFF);
@@ -257,12 +257,12 @@ void outputScanHeader(unsigned long now) {
 	header[8] = (lastcycle >> 16);
 	header[9] = (lastcycle >> 24);
 	
-	/* send offset to last distance */
-	unsigned int lastDistanceOffset = now - lastLidarRead;
-	header[10] = lastDistanceOffset & 0xff;
-	header[11] = (lastDistanceOffset >> 8);
+	// /* send offset to last distance */
+	// unsigned int lastDistanceOffset = now - lastLidarRead;
+	// header[10] = lastDistanceOffset & 0xff;
+	// header[11] = (lastDistanceOffset >> 8);
 
-	if (!verbose)   Serial.write(header, 12);
+	if (!verbose)   Serial.write(header, 10);
 	
 	// else Serial.println(lastcycle);
 	
@@ -310,12 +310,12 @@ void readLidar() {
 	// start: request lidar data
 	if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
 		
-		if (time > delayreadtime & motorspinning) return;
-		// if (count >= maxcount) return;
+		// if (time > delayreadtime & motorspinning) return;
+		if (count >= maxcount) return;
 		
 		lidarReadyTime = time + LIDARDELAY;	
-		if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
-		else 
+		// if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
+		// else 
 			distanceMeasureStart(false);
 		distanceMeasureStarted = true;
 		
@@ -460,8 +460,8 @@ int distanceGet() {
 
 // TODO: use top 2 lines if unused, may cause noisier scans/affects gmapping
 byte readIfAvailable() {
-	byte b = Wire.read(); 
-	return b;
+	// byte b = Wire.read(); 
+	// return b;
 	
 	unsigned long m = 0;
 	while (m < 10000) { // 0.1 second timeout
@@ -527,5 +527,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.915>"); 
+	Serial.println("<version:0.918>"); 
 }
