@@ -29,7 +29,8 @@ LIDARLite myLidarLite;
 
 // input pins
 const int photoPin  = 2; 
-const int lidarEnablePin = A3;
+const int lidarEnablePin = A3; // TODO: doesn't do anything, detach?
+// const int lidarEnablePin = 6; // TODO: swap with above for v2_proto
 
 // A4988 stepper driver pins 
 const int STEPPIN = 8; 
@@ -46,7 +47,6 @@ int commandSize = 0;
 volatile boolean photoblocked = false;
 volatile long timeToPhotoUnblockedCheck = 0;
 long photoUnblockedCheckInterval = 0; // approx 1/2 turn minimum should be OK
-long waitingForStop = 0;
 boolean motorspinning = false;
 const long WAITFORSTOPDELAY = 1500000;
 int rev = 0; // used by verbose/debug only 
@@ -55,6 +55,8 @@ volatile unsigned long delayreadtime = 0;
 volatile long lastcycle = 0;
 int maxcount = 0;
 volatile unsigned long lastLidarRead = 0;
+long parkTime = 0;
+unsigned long stopTime = 0;
 
 // motor speed
 int rpm = 180; // default
@@ -96,7 +98,7 @@ void setup() {
 	pinMode(DIRPIN,OUTPUT);
 	pinMode(SLEEP, OUTPUT);
 
-	// pinMode(lidarEnablePin, OUTPUT);
+	pinMode(lidarEnablePin, OUTPUT);
 	pinMode(photoPin, INPUT_PULLUP); // interrupt
 
 	
@@ -139,11 +141,10 @@ void loop(){
 			if (digitalRead(photoPin) == HIGH) { photoblocked = false; }
 			enableInterrupts();
 		}
+	}
 	
-		if (waitingForStop > 0 && waitingForStop <= time)  {
-			waitingForStop = 0;
-			hardStop();
-		}
+	if (stopTime > 0) {
+		if (time >= stopTime) hardStop();
 	}
 	
 	// stop motor if ignored by host
@@ -297,11 +298,8 @@ void trackRPM() {
 	if (lidarBroadcast)  outputScanHeader(now);
 	
 
-	// if (verbose) {
-		// Serial.print("rev: ");
-		// Serial.println(rev);
-		// rev ++;
-	// }
+	if (stopTime == -1)  
+		stopTime = now + parkTime;
 	
 }
 
@@ -310,13 +308,17 @@ void readLidar() {
 	// start: request lidar data
 	if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
 		
+		if (count > maxcount) return;
+		
+		boolean biascorrection = false;
 		// if (time > delayreadtime & motorspinning) return;
-		if (count >= maxcount) return;
+		if (count == maxcount) biascorrection=true;
 		
 		lidarReadyTime = time + LIDARDELAY;	
 		// if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
+		// if (count==0)  distanceMeasureStart(true); // recommended periodically CAUSES SERIOUS LAG
 		// else 
-			distanceMeasureStart(false);
+			distanceMeasureStart(biascorrection);
 		distanceMeasureStarted = true;
 		
 	}
@@ -366,13 +368,32 @@ void goMotor() {
 	tone(STEPPIN, frequency);
 	enableInterrupts();
 	motorspinning = true;
-	waitingForStop = 0;
+	stopTime = 0;
 }
 
 void stopMotorFacingForward() {
+	
+
+	//disableInterrupts();
+
 	unsigned int frequency = frequencyFromRPM(60);
 	tone(STEPPIN, frequency); 
-	waitingForStop = time + WAITFORSTOPDELAY;
+
+	stopTime = -1;
+	
+	//long now = micros();
+	//long timetonextrev = lastrev + 2*cycle - now;
+	
+	//long n = cycle*0.75;
+
+	//if (timetonextrev < n) timetonextrev += cycle;
+	//timetonextrev = timetonextrev * 0.80 * rpm/60.0;	
+	//timetonextrev = timetonextrev/1000.0;
+	
+	//delay(timetonextrev);
+	//hardStop();
+	
+	//Serial.println(timetonextrev);
 }
 
 void motorsEnable() { 	
@@ -511,8 +532,11 @@ unsigned int frequencyFromRPM(int rpm) {
 void setRPM(int n) {
 	rpm = n;
 	cycle = (60.0/(float) rpm) * 1000000;
-	maxcount = cycle/LIDARDELAY -3;
+	maxcount = cycle/LIDARDELAY -(cycle/LIDARDELAY * 0.022);
 	photoUnblockedCheckInterval = cycle/2;
+	parkTime = (float)rpm/60.0 * cycle * 0.75;
+	
+	// Serial.println(maxcount);
 }
 
 void toggleVerbose() {
@@ -527,5 +551,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.918>"); 
+	Serial.println("<version:0.934>"); 
 }
