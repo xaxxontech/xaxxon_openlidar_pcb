@@ -14,7 +14,8 @@ b - lidar broadcast start
 n - lidar broadcast stop
 x - get ID
 y - get version 
-e - enable host hearbeat check
+e - enable host heartbeat check
+3 - disable host heartbeat check
 h - host heartbeat
 v - toggle verbose
 a - all on (1, b, g)
@@ -27,17 +28,17 @@ f - all off (p, n, 0)
 
 LIDARLite myLidarLite;
 
-// input pins
-const int photoPin  = 2; 
-const int lidarEnablePin = A3; // TODO: doesn't do anything, detach?
-// const int lidarEnablePin = 6; // TODO: swap with above for v2_proto
+// pins
+#define PHOTOPIN	2 
+const int LIDARENABLEPIN =  A3;
+#define LIDARMOSFET 6 // TODO: swap with above for v2_proto
 
 // A4988 stepper driver pins 
-const int STEPPIN = 8; 
-const int DIRPIN = 4; 
-const int M0 = 7; 
-const int M1 = 3; 
-const int SLEEP = 9; // low = disable 
+#define STEPPIN		8
+#define DIRPIN		4
+#define M0			7
+#define M1			3
+#define SLEEP		9 // low = disable 
 
 // command byte buffer 
 int buffer[32];
@@ -75,18 +76,18 @@ byte isBusy = 0;
 int loopCount;
 boolean distanceMeasureStarted = false;
 // timed distance readi OUTPUT); 
-	// digitalWrite(ng
+
 unsigned long lidarReadyTime = 0;
 const long LIDARDELAY = 1400; // read period microseconds
 const int BIASCORRECTIONCOUNT = 200;
 boolean lidarenabled = true;
 
 // host heartbeat
-const boolean HEARTBEATENABLED = true;
+boolean heartbeatenabled = true;
 unsigned long lasthostresponse = 0;
 const unsigned long HOSTTIMEOUT = 10000000; // 10 sec
-int timedout = 0;
-const int MAXTIMEOUTS = 10;
+// int timedout = 0;
+// const int MAXTIMEOUTS = 10;
 
 volatile unsigned long time = 0;
 boolean verbose = false;
@@ -94,14 +95,15 @@ boolean verbose = false;
 
 void setup() { 
 
+	// photo sensor
+	pinMode(PHOTOPIN, INPUT_PULLUP); // interrupt
+
+
+	// stepper driver
 	pinMode(STEPPIN,OUTPUT); 
 	pinMode(DIRPIN,OUTPUT);
 	pinMode(SLEEP, OUTPUT);
 
-	pinMode(lidarEnablePin, OUTPUT);
-	pinMode(photoPin, INPUT_PULLUP); // interrupt
-
-	
 	// set step mode
 	pinMode(M0, OUTPUT); 
 	digitalWrite(M0, HIGH); 
@@ -112,14 +114,20 @@ void setup() {
 	digitalWrite(DIRPIN, HIGH); // default direction 
 	digitalWrite(SLEEP, LOW); // stepper sleeping
 
+
+	// garmin lidar
+	pinMode(LIDARMOSFET, OUTPUT);
+	pinMode(LIDARENABLEPIN, OUTPUT);
+	lidarEnable();
+	delay(200);
 	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
 	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
 	myLidarLite.write(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
 	// myLidarLite.write(0x04, 0b00000100); // Use non-default reference acquisition count
 	// myLidarLite.write(0x12, 0x03); // Reference acquisition count of 3 (default is 5)
-	
-	delay(100);
-	lidarDisable();
+	// delay(100);
+	// lidarDisable();
+
 
 	Serial.begin(115200);
 	Serial.println("<reset>");
@@ -138,7 +146,7 @@ void loop(){
 
 	if (photoblocked) {
 		if (time >= timeToPhotoUnblockedCheck && motorspinning) {
-			if (digitalRead(photoPin) == HIGH) { photoblocked = false; }
+			if (digitalRead(PHOTOPIN) == HIGH) { photoblocked = false; }
 			enableInterrupts();
 		}
 	}
@@ -148,7 +156,7 @@ void loop(){
 	}
 	
 	// stop motor if ignored by host
-	if (HEARTBEATENABLED) { // TODO: buggy?
+	if (heartbeatenabled) { // TODO: buggy?
 		if ((motorspinning || lidarenabled || lidarBroadcast) && time - lasthostresponse > HOSTTIMEOUT) {
 			lasthostresponse = time;
 			allOff();
@@ -206,6 +214,8 @@ void parseCommand(){
 	else if (buffer[0] == 'f') allOff();
 	else if (buffer[0] == 'a') allOn();
 
+	else if (buffer[0] == 'e') heartbeatenabled = true;
+	else if (buffer[0] == '3') heartbeatenabled = false;
 }
 
 
@@ -308,17 +318,17 @@ void readLidar() {
 	// start: request lidar data
 	if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
 		
-		if (count > maxcount) return;
+		if (count > maxcount) return; // near complete rev, stop reading 
 		
 		boolean biascorrection = false;
 		// if (time > delayreadtime & motorspinning) return;
-		if (count == maxcount) biascorrection=true;
+		if (count == maxcount) biascorrection=true; 
 		
 		lidarReadyTime = time + LIDARDELAY;	
 		// if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
 		// if (count==0)  distanceMeasureStart(true); // recommended periodically CAUSES SERIOUS LAG
 		// else 
-			distanceMeasureStart(biascorrection);
+		distanceMeasureStart(biascorrection);
 		distanceMeasureStarted = true;
 		
 	}
@@ -356,6 +366,7 @@ void goMotor() {
 	// tone(STEPPIN, f);
 	// delay(250);
 	
+	/* Accelerate */
 	int acceltime = 1000; // ms
 	int steps = 20;
 	int startfreq = frequencyFromRPM(30);
@@ -409,22 +420,25 @@ void hardStop() {
 }
 
 void lidarEnable() {
-	digitalWrite(lidarEnablePin, HIGH);
-	// delay(100);
+	digitalWrite(LIDARMOSFET, HIGH);
+	delay(100);
+	digitalWrite(LIDARENABLEPIN, HIGH);
 	lidarenabled = true;
 }
 
 void lidarDisable() {
-	digitalWrite(lidarEnablePin, LOW);
+	digitalWrite(LIDARENABLEPIN, LOW);
+	// delay(10);
+	// digitalWrite(LIDARMOSFET, LOW);
 	lidarenabled = false;
 }
 
 void enableInterrupts() {
-	attachInterrupt(digitalPinToInterrupt(photoPin), trackRPM, LOW);
+	attachInterrupt(digitalPinToInterrupt(PHOTOPIN), trackRPM, LOW);
 }
 
 void disableInterrupts() {
-	detachInterrupt(digitalPinToInterrupt(photoPin));
+	detachInterrupt(digitalPinToInterrupt(PHOTOPIN));
 }
 
 void distanceMeasureStart(bool biasCorrection) {
@@ -432,7 +446,7 @@ void distanceMeasureStart(bool biasCorrection) {
 	// Send measurement command
 	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
 	Wire.write(0X00); // Prepare write to register 0x00
-	if(biasCorrection == true)	{
+	if(biasCorrection == true)	{    
 		Wire.write(0X04); // Perform measurement with receiver bias correction
 	}
 	else {
@@ -521,7 +535,7 @@ void allOff() {
 	stopMotorFacingForward();
 	lidarBroadcast = false;
 	lidarDisable();
-	timedout = 0;
+	// timedout = 0;
 }
 
 unsigned int frequencyFromRPM(int rpm) {
@@ -551,5 +565,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.934>"); 
+	Serial.println("<version:0.936>"); 
 }
