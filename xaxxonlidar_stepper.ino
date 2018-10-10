@@ -8,8 +8,8 @@ s - motor stop
 p - motor stop facing forward
 r,a - set motor rpm (0-255, not 10 or 13)
 d,a - set motor direction (1,0)
-1 - lidar enable pin HIGH
-0 - lidar enable pin LOW
+1 - lidar enable 
+0 - lidar disable
 b - lidar broadcast start
 n - lidar broadcast stop
 x - get ID
@@ -52,12 +52,14 @@ boolean motorspinning = false;
 const long WAITFORSTOPDELAY = 1500000;
 int rev = 0; // used by verbose/debug only 
 volatile unsigned long lastrev = 0;
-volatile unsigned long delayreadtime = 0;
+// volatile unsigned long delayreadtime = 0;
 volatile long lastcycle = 0;
 int maxcount = 0;
 volatile unsigned long lastLidarRead = 0;
 long parkTime = 0;
 unsigned long stopTime = 0;
+const float PARKRATIO = 0.75;
+const float HEADEROFFSETRATIO = 0.783; //  photo sensor rotational offset from X (straight forward)
 
 // motor speed
 int rpm = 180; // default
@@ -69,7 +71,9 @@ long cycle = 0;
 boolean lidarBroadcast = false;
 volatile unsigned int count = 0;
 int distancecm = 0;
-volatile boolean delayedOutputScanHeader = false;
+// volatile boolean delayedOutputScanHeader = false;
+volatile unsigned long outputScanHeaderTime = 0; // was 'volatile' but caused occasional scanheader output at interrupt
+unsigned long scanHeaderTimeOffset = 0;
 
 // distance reading 
 byte isBusy = 0;
@@ -79,7 +83,8 @@ boolean distanceMeasureStarted = false;
 
 unsigned long lidarReadyTime = 0;
 const long LIDARDELAY = 1400; // read period microseconds
-const int BIASCORRECTIONCOUNT = 200;
+// const int SKIPLAST = 5;
+// const int BIASCORRECTIONCOUNT = 200;
 boolean lidarenabled = true;
 
 // host heartbeat
@@ -139,10 +144,17 @@ void setup() {
 }
 	
 void loop(){
-	
 	time = micros();
 	
 	if (lidarBroadcast) readLidar();
+	
+	if (outputScanHeaderTime !=0 && time >= outputScanHeaderTime && lidarBroadcast) {
+		outputScanHeaderTime = 0;
+		lastcycle = time - lastrev;
+		if (verbose)  Serial.println(lastcycle);
+		lastrev = time;
+		outputScanHeader(time);
+	}
 
 	if (photoblocked) {
 		if (time >= timeToPhotoUnblockedCheck && motorspinning) {
@@ -295,21 +307,24 @@ void trackRPM() {
 
 	unsigned long now = micros();
 
-	lastcycle = now - lastrev;
-
-	if (verbose)  Serial.println(lastcycle);
+	// lastcycle = now - lastrev;
+	// if (verbose)  Serial.println(lastcycle);
+	// lastrev = now;
 	
-	lastrev = now;
-	delayreadtime = lastrev + cycle - (LIDARDELAY*3);
-		
 	photoblocked = true;
-	timeToPhotoUnblockedCheck = time + photoUnblockedCheckInterval;
+	timeToPhotoUnblockedCheck = now + photoUnblockedCheckInterval;
 	
-	if (lidarBroadcast)  outputScanHeader(now);
-	
+	// if (lidarBroadcast)  outputScanHeader(now);
+	// if (outputScanHeaderTime != 0) { // TODO: TESTING
+		// Serial.println("outputScanHeaderTime != 0");
+		// allOff();
+		// return;
+	// }
+	outputScanHeaderTime = now + scanHeaderTimeOffset;
 
 	if (stopTime == -1)  
 		stopTime = now + parkTime;
+	else if (stopTime == -2) stopTime = -1;
 	
 }
 
@@ -346,10 +361,10 @@ void readLidar() {
 		
 		lastLidarRead = time;
 		
-		if (delayedOutputScanHeader) {
-			outputScanHeader(time);
-			delayedOutputScanHeader = false;
-		}
+		// if (delayedOutputScanHeader) {
+			// outputScanHeader(time);
+			// delayedOutputScanHeader = false;
+		// }
 	}
 	
 }	
@@ -384,13 +399,13 @@ void goMotor() {
 
 void stopMotorFacingForward() {
 	
-
 	//disableInterrupts();
 
 	unsigned int frequency = frequencyFromRPM(60);
 	tone(STEPPIN, frequency); 
 
-	stopTime = -1;
+	stopTime = -2;
+	// if (time - lastrev < (float) cycle*0.75) stopTime = -2;
 	
 	//long now = micros();
 	//long timetonextrev = lastrev + 2*cycle - now;
@@ -546,9 +561,10 @@ unsigned int frequencyFromRPM(int rpm) {
 void setRPM(int n) {
 	rpm = n;
 	cycle = (60.0/(float) rpm) * 1000000;
-	maxcount = cycle/LIDARDELAY -(cycle/LIDARDELAY * 0.022);
+	maxcount = cycle/LIDARDELAY - (cycle/LIDARDELAY * 0.014);
 	photoUnblockedCheckInterval = cycle/2;
-	parkTime = (float)rpm/60.0 * cycle * 0.75;
+	parkTime = (float)rpm/60.0 * cycle * PARKRATIO;
+	scanHeaderTimeOffset = cycle * HEADEROFFSETRATIO;
 	
 	// Serial.println(maxcount);
 }
@@ -565,5 +581,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.936>"); 
+	Serial.println("<version:0.941>"); 
 }
