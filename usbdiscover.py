@@ -1,13 +1,15 @@
-# oculusprimesocket.py module
-# make tcp socket connection with Oculus Prime robot, relay commands and messages 
 
-"""make tcp socket connection with Oculus Prime Server Application
-provide functions for relay of commands and messages"""
-
-import serial, os, time
+import serial, os, time, atexit
 
 def removelockfiles():
 	os.system("rm -f /tmp/dev_ttyUSB*")
+	
+def removelockfile():
+	if os.path.exists(lockfilepath):
+		os.remove(lockfilepath)
+
+atexit.register(removelockfile)
+
 
 def checkBoardId(idstring, ser):
 	ser.reset_input_buffer()
@@ -143,3 +145,4 @@ def usbdiscover(idstring):
 		sys.exit(0)
 	
 	return ser
+

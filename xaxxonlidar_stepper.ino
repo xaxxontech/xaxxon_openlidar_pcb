@@ -31,7 +31,7 @@ LIDARLite myLidarLite;
 // pins
 #define PHOTOPIN	2 
 const int LIDARENABLEPIN =  A3;
-#define LIDARMOSFET 6 // TODO: swap with above for v2_proto
+#define LIDARMOSFET 6
 
 // A4988 stepper driver pins 
 #define STEPPIN		8
@@ -58,8 +58,10 @@ int maxcount = 0;
 volatile unsigned long lastLidarRead = 0;
 long parkTime = 0;
 unsigned long stopTime = 0;
-const float PARKRATIO = 0.75;
-const float HEADEROFFSETRATIO = 0.783; //  photo sensor rotational offset from X (straight forward)
+// const float PARKRATIO = 0.75; // PROTO 2
+// const float HEADEROFFSETRATIO = 0.783; //  photo sensor rotational offset from X (straight forward) PROTO 2
+const float PARKRATIO = 0.5; // smt PCB, prime accessory frame
+const float HEADEROFFSETRATIO = 0.52; //  photo sensor rotational offset from X (straight forward) smt PCB, prime accessory frame
 
 // motor speed
 int rpm = 180; // default
@@ -118,13 +120,13 @@ void setup() {
 
 	digitalWrite(DIRPIN, HIGH); // default direction 
 	digitalWrite(SLEEP, LOW); // stepper sleeping
-
-
+	
 	// garmin lidar
 	pinMode(LIDARMOSFET, OUTPUT);
 	pinMode(LIDARENABLEPIN, OUTPUT);
 	lidarEnable();
 	delay(200);
+	
 	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
 	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
 	myLidarLite.write(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
@@ -135,6 +137,7 @@ void setup() {
 
 
 	Serial.begin(115200);
+
 	Serial.println("<reset>");
 	
 	lasthostresponse = micros();
@@ -369,6 +372,11 @@ void readLidar() {
 	
 }	
 
+void lidarWarmUp() {
+	Serial.println(myLidarLite.distance());
+	for (int i=0; i<100; i++)   Serial.println(myLidarLite.distance(false));
+}
+
 void goMotor() {
 	motorsEnable();
 	unsigned int frequency = frequencyFromRPM(rpm);
@@ -382,7 +390,7 @@ void goMotor() {
 	// delay(250);
 	
 	/* Accelerate */
-	int acceltime = 1000; // ms
+	int acceltime = 2000; // ms
 	int steps = 20;
 	int startfreq = frequencyFromRPM(30);
 	int inc = (frequency - startfreq)/steps;
@@ -436,7 +444,7 @@ void hardStop() {
 
 void lidarEnable() {
 	digitalWrite(LIDARMOSFET, HIGH);
-	delay(100);
+	delay(200);
 	digitalWrite(LIDARENABLEPIN, HIGH);
 	lidarenabled = true;
 }
@@ -581,5 +589,5 @@ void toggleVerbose() {
 }
 
 void version() {
-	Serial.println("<version:0.941>"); 
+	Serial.println("<version:0.942>"); 
 }
