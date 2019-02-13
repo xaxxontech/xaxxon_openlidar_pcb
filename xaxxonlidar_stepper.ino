@@ -12,6 +12,7 @@ d,a - set motor direction (1,0)
 0 - lidar disable
 b - lidar broadcast start
 n - lidar broadcast stop
+m - lidar read single
 x - get ID
 y - get version 
 e - enable host heartbeat check
@@ -30,7 +31,7 @@ LIDARLite myLidarLite;
 
 // pins
 #define PHOTOPIN	2 
-const int LIDARENABLEPIN =  A3;
+const int LIDARENABLEPIN = A3;
 #define LIDARMOSFET 6
 
 // A4988 stepper driver pins 
@@ -122,10 +123,16 @@ void setup() {
 	digitalWrite(SLEEP, LOW); // stepper sleeping
 	
 	// garmin lidar
-	pinMode(LIDARMOSFET, OUTPUT);
+	// pinMode(LIDARMOSFET, OUTPUT);
+	// digitalWrite(LIDARMOSFET, HIGH);
+	// delay(200);
 	pinMode(LIDARENABLEPIN, OUTPUT);
-	lidarEnable();
-	delay(200);
+	digitalWrite(LIDARENABLEPIN, HIGH);
+	lidarenabled = true;
+
+	
+	// lidarEnable();
+	// delay(2000);
 	
 	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
 	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
@@ -222,6 +229,7 @@ void parseCommand(){
 		
 	else if(buffer[0] == 'b') lidarBroadcast = true;
 	else if(buffer[0] == 'n') lidarBroadcast = false;
+	else if(buffer[0] == 'm') Serial.println(myLidarLite.distance());
 	
 	
 	else if(buffer[0] == 'h') lasthostresponse = time;
@@ -443,17 +451,15 @@ void hardStop() {
 }
 
 void lidarEnable() {
-	digitalWrite(LIDARMOSFET, HIGH);
-	delay(200);
-	digitalWrite(LIDARENABLEPIN, HIGH);
-	lidarenabled = true;
+	// digitalWrite(LIDARMOSFET, HIGH);
+	// delay(200);
+	// digitalWrite(LIDARENABLEPIN, HIGH);
+	// lidarenabled = true;
 }
 
 void lidarDisable() {
-	digitalWrite(LIDARENABLEPIN, LOW);
-	// delay(10);
-	// digitalWrite(LIDARMOSFET, LOW);
-	lidarenabled = false;
+	// digitalWrite(LIDARENABLEPIN, LOW);
+	// lidarenabled = false;
 }
 
 void enableInterrupts() {
