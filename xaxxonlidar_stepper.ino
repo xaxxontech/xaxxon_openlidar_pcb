@@ -123,16 +123,9 @@ void setup() {
 	digitalWrite(SLEEP, LOW); // stepper sleeping
 	
 	// garmin lidar
-	// pinMode(LIDARMOSFET, OUTPUT);
-	// digitalWrite(LIDARMOSFET, HIGH);
-	// delay(200);
+	pinMode(LIDARMOSFET, OUTPUT);
 	pinMode(LIDARENABLEPIN, OUTPUT);
-	digitalWrite(LIDARENABLEPIN, HIGH);
-	lidarenabled = true;
-
-	
-	// lidarEnable();
-	// delay(2000);
+	lidarEnable();
 	
 	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
 	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
@@ -255,12 +248,7 @@ void outputDistance() {
 	
 	if (!verbose) Serial.write(d, 2);
 	else {
-	// Serial.print(" ");
-	// Serial.print(cmlow);
-	// Serial.print(" ");
-	Serial.println(cm);
-	// Serial.print("distance: ");
-	// Serial.println(distancecm);
+	// Serial.println(cm);
 	}
 	
 }
@@ -298,13 +286,14 @@ void outputScanHeader(unsigned long now) {
 
 	if (!verbose)   Serial.write(header, 10);
 	
-	// else Serial.println(lastcycle);
-	
-	// Serial.print("count: ");
-	// Serial.println(count);
-	// Serial.print("cycle: ");
-	// Serial.println(cycle);
-	// Serial.println(testtime);
+	else { 
+		Serial.println(lastcycle);
+		Serial.print("count: ");
+		Serial.println(count);
+		Serial.print("cycle: ");
+		Serial.println(cycle);
+		// Serial.println(testtime);
+	}
 		
 	count = 0;
 
@@ -451,15 +440,15 @@ void hardStop() {
 }
 
 void lidarEnable() {
-	// digitalWrite(LIDARMOSFET, HIGH);
-	// delay(200);
-	// digitalWrite(LIDARENABLEPIN, HIGH);
-	// lidarenabled = true;
+	digitalWrite(LIDARENABLEPIN, HIGH); // must be 1st! (didn't matter before due to mosfet speed?)
+	digitalWrite(LIDARMOSFET, HIGH);
+	delay(200);
+	lidarenabled = true;
 }
 
 void lidarDisable() {
 	// digitalWrite(LIDARENABLEPIN, LOW);
-	// lidarenabled = false;
+	lidarenabled = false;
 }
 
 void enableInterrupts() {
@@ -591,9 +580,10 @@ void toggleVerbose() {
 	else {
 		Serial.println("verbose on");
 		verbose = true;
+		heartbeatenabled = false;
 	}
 }
 
 void version() {
-	Serial.println("<version:0.942>"); 
+	Serial.println("<version:0.948>"); 
 }
