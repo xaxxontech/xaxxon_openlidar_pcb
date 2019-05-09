@@ -1,5 +1,4 @@
-// photo interrupter GP1A57HRJ00F and garmin lidar lite 3 test
-// using MALG
+// photo interrupter GP1A57HRJ00F and garmin lidar lite 3
 
 /*  Commands:
 
@@ -7,20 +6,23 @@ g - motor go
 s - motor stop 
 p - motor stop facing forward
 r,a - set motor rpm (0-255, not 10 or 13)
-d,a - set motor direction (1,0)
+d,a - set motor direction (1,0) default=1 CW/RHR+ if motor on bottom
 1 - lidar enable 
-0 - lidar disable
 b - lidar broadcast start
 n - lidar broadcast stop
+a - all on (1, b, g)
+f - all off (p, n)
 m - lidar read single
 x - get ID
 y - get version 
-e - enable host heartbeat check
+e - enable host heartbeat check (default)
 3 - disable host heartbeat check
 h - host heartbeat
-v - toggle verbose
-a - all on (1, b, g)
-f - all off (p, n, 0)
+v - toggle verbose output
+k,a,b - set header offset from photo sensor -- 2 byte int units: deci-degrees (1/10 degree)	
+i - print header offset ratio
+q,a,b - set park position offset from photo sensor -- 2 byte int units: deci-degrees (1/10 degree)	
+t,a,b - set read interval -- 2 byte int microseconds 
  
 */
 
@@ -59,43 +61,40 @@ int maxcount = 0;
 volatile unsigned long lastLidarRead = 0;
 long parkTime = 0;
 unsigned long stopTime = 0;
-// const float PARKRATIO = 0.75; // PROTO 2
-// const float HEADEROFFSETRATIO = 0.783; //  photo sensor rotational offset from X (straight forward) PROTO 2
-const float PARKRATIO = 0.5; // smt PCB, prime accessory frame
-const float HEADEROFFSETRATIO = 0.52; //  photo sensor rotational offset from X (straight forward) smt PCB, prime accessory frame
+unsigned long safetyStopTime = 0; // in case photo sensor failure, stop motor eventually
+float parkRatio = 0.5; // smt PCB, prime accessory frame
+float headerOffsetRatio = 0.525; //  photo sensor rotational offset from X (straight forward) smt PCB, prime accessory frame
 
 // motor speed
 int rpm = 180; // default
 const int MICROSTEPS = 32;
 const int STEPSPERREV = 48;
 long cycle = 0;
+const int PARKINGSPEED = 120; //rpm
 
 // distance output
 boolean lidarBroadcast = false;
 volatile unsigned int count = 0;
 int distancecm = 0;
 // volatile boolean delayedOutputScanHeader = false;
-volatile unsigned long outputScanHeaderTime = 0; // was 'volatile' but caused occasional scanheader output at interrupt
+volatile unsigned long outputScanHeaderTime = 0; 
 unsigned long scanHeaderTimeOffset = 0;
 
 // distance reading 
 byte isBusy = 0;
 int loopCount;
 boolean distanceMeasureStarted = false;
-// timed distance readi OUTPUT); 
-
 unsigned long lidarReadyTime = 0;
-const long LIDARDELAY = 1400; // read period microseconds
-// const int SKIPLAST = 5;
-// const int BIASCORRECTIONCOUNT = 200;
-boolean lidarenabled = true;
+long readInterval = 1400; // read period microseconds
+const boolean DOBIASCORRECTION = true; // perform read with biascorrection once per rev
+// const int SKIPLAST = 6; // should be lowest possible yet still yeild unchanging count 6 if bias correction
+const long HEADERGAP = 8400; // microseconds - lowest possible yet still yeild unchanging count (incl bias correction)
+boolean lidarenabled = false;
 
 // host heartbeat
 boolean heartbeatenabled = true;
 unsigned long lasthostresponse = 0;
 const unsigned long HOSTTIMEOUT = 10000000; // 10 sec
-// int timedout = 0;
-// const int MAXTIMEOUTS = 10;
 
 volatile unsigned long time = 0;
 boolean verbose = false;
@@ -119,22 +118,14 @@ void setup() {
 	pinMode(M1,OUTPUT);
 	digitalWrite(M1, HIGH);
 
-	digitalWrite(DIRPIN, HIGH); // default direction 
+	digitalWrite(DIRPIN, HIGH); // default direction  dir=1 CW/RHR+ if motor on bottom
 	digitalWrite(SLEEP, LOW); // stepper sleeping
 	
 	// garmin lidar
 	pinMode(LIDARMOSFET, OUTPUT);
 	pinMode(LIDARENABLEPIN, OUTPUT);
-	lidarEnable();
-	
-	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
-	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
-	myLidarLite.write(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
-	// myLidarLite.write(0x04, 0b00000100); // Use non-default reference acquisition count
-	// myLidarLite.write(0x12, 0x03); // Reference acquisition count of 3 (default is 5)
-	// delay(100);
-	// lidarDisable();
-
+	digitalWrite(LIDARENABLEPIN, LOW);
+	digitalWrite(LIDARMOSFET, LOW);
 
 	Serial.begin(115200);
 
@@ -167,14 +158,17 @@ void loop(){
 	}
 	
 	if (stopTime > 0) {
-		if (time >= stopTime) hardStop();
+		if (time >= stopTime) stop();
 	}
 	
+	if (time > safetyStopTime && safetyStopTime != 0)  stop();
+	
 	// stop motor if ignored by host
-	if (heartbeatenabled) { // TODO: buggy?
+	if (heartbeatenabled) { 
 		if ((motorspinning || lidarenabled || lidarBroadcast) && time - lasthostresponse > HOSTTIMEOUT) {
 			lasthostresponse = time;
 			allOff();
+			stop();
 		}
 	}
 	
@@ -184,46 +178,45 @@ void loop(){
 	
 }
 
-
 // buffer and/or execute commands from host controller 
 void manageCommand() {
 	int input = Serial.read();
-	if((input == 13) || (input == 10)){
-		if(commandSize > 0){
-			  parseCommand();
-			  commandSize = 0; 
-		}
+	buffer[commandSize++] = input;
+	
+	if((input == 13) || (input == 10) && commandSize > 0 && buffer[0] != 'k' && buffer[0] != 'q' && buffer[0] != 't') {
+		commandSize--; // ignore newline
+		parseCommand();
+		commandSize = 0; 
 	} 
-	else {
-		buffer[commandSize++] = input;
+	else if ((buffer[0] == 'k' || buffer[0]=='q' ||  buffer[0]=='t') && commandSize == 3) { // handle commands with 2 byte parameters
+		parseCommand();
+		commandSize = 0; 
 	}
+	else if ((input == 13 || input == 10) && commandSize == 1)  commandSize = 0; // ignore solitary newlines
 	
 	lasthostresponse = time;
 }
 
 void parseCommand(){
   
-	if (buffer[0] == 's'){ // stop motor
-		noTone(STEPPIN);
-		digitalWrite(SLEEP, LOW); 
-		motorspinning = false;
-	}
+	if (buffer[0] == 's') stop(); // stop motor
 	else if (buffer[0] == 'g') goMotor(); 
-	
 	else if(buffer[0] == 'p') stopMotorFacingForward();
 	else if(buffer[0] == 'r') setRPM(buffer[1]);
-	else if (buffer[0] == 'd') digitalWrite(DIRPIN, buffer[1]); // 0 or 1
+	else if (buffer[0] == 'd') digitalWrite(DIRPIN, buffer[1]); // 0 or 1 (default 1) 1=CW/RHR+ if motor on bottom
 	
 	else if (buffer[0] == '1') { lidarEnable(); }
-	else if (buffer[0] == '0') { lidarDisable(); }
+	// else if (buffer[0] == '0') { lidarDisable(); }
 
-	else if(buffer[0] == 'x') Serial.println("<id::xaxxonlidar>");
+	else if(buffer[0] == 'x') boardID();
 	else if(buffer[0] == 'y') version();
 		
 	else if(buffer[0] == 'b') lidarBroadcast = true;
 	else if(buffer[0] == 'n') lidarBroadcast = false;
-	else if(buffer[0] == 'm') Serial.println(myLidarLite.distance());
-	
+	else if(buffer[0] == 'm') {
+		if (!lidarenabled) lidarEnable();
+		Serial.println(myLidarLite.distance()); // TODO: why doesn't this work?
+	}
 	
 	else if(buffer[0] == 'h') lasthostresponse = time;
 	else if (buffer[0] == 'v') toggleVerbose();
@@ -232,6 +225,14 @@ void parseCommand(){
 
 	else if (buffer[0] == 'e') heartbeatenabled = true;
 	else if (buffer[0] == '3') heartbeatenabled = false;
+	else if (buffer[0] == 'k') updateHeaderOffset();
+	else if (buffer[0] == 'q') updateParkRatio();
+	else if (buffer[0] == 'i') { 
+		Serial.print("<");
+		Serial.print(headerOffsetRatio,3);
+		Serial.println(">");
+	}
+	else if (buffer[0] == 't') updateReadInterval();
 }
 
 
@@ -254,12 +255,6 @@ void outputDistance() {
 }
 
 void outputScanHeader(unsigned long now) {
-	
-	/* avoids output/read +/-1 count mismatch */
-	// if (distanceMeasureStarted && !isBusy) { // in the middle of data point ouput
-		// delayedOutputScanHeader = true;
-		// return;
-	// }
 	
 	uint8_t header[10];
 	
@@ -303,8 +298,6 @@ void trackRPM() {
 	
 	disableInterrupts();
 
-	// if (photoblocked) return; // just in case
-
 	unsigned long now = micros();
 
 	// lastcycle = now - lastrev;
@@ -314,12 +307,6 @@ void trackRPM() {
 	photoblocked = true;
 	timeToPhotoUnblockedCheck = now + photoUnblockedCheckInterval;
 	
-	// if (lidarBroadcast)  outputScanHeader(now);
-	// if (outputScanHeaderTime != 0) { // TODO: TESTING
-		// Serial.println("outputScanHeaderTime != 0");
-		// allOff();
-		// return;
-	// }
 	outputScanHeaderTime = now + scanHeaderTimeOffset;
 
 	if (stopTime == -1)  
@@ -329,7 +316,7 @@ void trackRPM() {
 }
 
 void readLidar() {
-	
+		
 	// start: request lidar data
 	if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
 		
@@ -337,9 +324,9 @@ void readLidar() {
 		
 		boolean biascorrection = false;
 		// if (time > delayreadtime & motorspinning) return;
-		if (count == maxcount) biascorrection=true; 
+		if (count == maxcount && DOBIASCORRECTION) biascorrection=true; 
 		
-		lidarReadyTime = time + LIDARDELAY;	
+		lidarReadyTime = time + readInterval;	
 		// if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
 		// if (count==0)  distanceMeasureStart(true); // recommended periodically CAUSES SERIOUS LAG
 		// else 
@@ -360,32 +347,15 @@ void readLidar() {
 		distanceMeasureStarted = false;
 		
 		lastLidarRead = time;
-		
-		// if (delayedOutputScanHeader) {
-			// outputScanHeader(time);
-			// delayedOutputScanHeader = false;
-		// }
 	}
 	
 }	
 
-void lidarWarmUp() {
-	Serial.println(myLidarLite.distance());
-	for (int i=0; i<100; i++)   Serial.println(myLidarLite.distance(false));
-}
-
 void goMotor() {
+	
 	motorsEnable();
 	unsigned int frequency = frequencyFromRPM(rpm);
-	
-	// int f = frequency*0.5;
-	// tone(STEPPIN, f);
-	// delay(250);
 
-	// f = frequency*0.75;
-	// tone(STEPPIN, f);
-	// delay(250);
-	
 	/* Accelerate */
 	int acceltime = 2000; // ms
 	int steps = 20;
@@ -402,29 +372,22 @@ void goMotor() {
 	stopTime = 0;
 }
 
+void changeSpeed() {
+	if (!motorspinning) return;
+	
+	unsigned int frequency = frequencyFromRPM(rpm);
+	tone(STEPPIN, frequency);
+}
+
 void stopMotorFacingForward() {
 	
-	//disableInterrupts();
-
-	unsigned int frequency = frequencyFromRPM(60);
+	// slow down 
+	unsigned int frequency = frequencyFromRPM(PARKINGSPEED);
 	tone(STEPPIN, frequency); 
 
 	stopTime = -2;
-	// if (time - lastrev < (float) cycle*0.75) stopTime = -2;
 	
-	//long now = micros();
-	//long timetonextrev = lastrev + 2*cycle - now;
-	
-	//long n = cycle*0.75;
-
-	//if (timetonextrev < n) timetonextrev += cycle;
-	//timetonextrev = timetonextrev * 0.80 * rpm/60.0;	
-	//timetonextrev = timetonextrev/1000.0;
-	
-	//delay(timetonextrev);
-	//hardStop();
-	
-	//Serial.println(timetonextrev);
+	safetyStopTime = time + 10000000; // ten seconds
 }
 
 void motorsEnable() { 	
@@ -432,24 +395,36 @@ void motorsEnable() {
 	// delay(100);
 }
 
-void hardStop() {
+void stop() {
 	noTone(STEPPIN);
 	delay(500);
 	digitalWrite(SLEEP, LOW); 
 	motorspinning = false;
+	safetyStopTime = 0;
 }
 
 void lidarEnable() {
+	if (lidarenabled) return;
+	
 	digitalWrite(LIDARENABLEPIN, HIGH); // must be 1st! (didn't matter before due to mosfet speed?)
 	digitalWrite(LIDARMOSFET, HIGH);
 	delay(200);
+	
+	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
+	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
+	myLidarLite.write(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
+	// myLidarLite.write(0x04, 0b00000100); // Use non-default reference acquisition count
+	// myLidarLite.write(0x12, 0x03); // Reference acquisition count of 3 (default is 5)
+	delay(200);
+	if (verbose) Serial.println("lidar enabled");
+
 	lidarenabled = true;
 }
 
-void lidarDisable() {
+// void lidarDisable() {
 	// digitalWrite(LIDARENABLEPIN, LOW);
-	lidarenabled = false;
-}
+	// lidarenabled = false;
+// }
 
 void enableInterrupts() {
 	attachInterrupt(digitalPinToInterrupt(PHOTOPIN), trackRPM, LOW);
@@ -552,7 +527,7 @@ void allOn() {
 void allOff() {
 	stopMotorFacingForward();
 	lidarBroadcast = false;
-	lidarDisable();
+	// lidarDisable();
 	// timedout = 0;
 }
 
@@ -564,12 +539,46 @@ unsigned int frequencyFromRPM(int rpm) {
 void setRPM(int n) {
 	rpm = n;
 	cycle = (60.0/(float) rpm) * 1000000;
-	maxcount = cycle/LIDARDELAY - (cycle/LIDARDELAY * 0.014);
+	// maxcount = cycle/LIDARDELAY - (cycle/LIDARDELAY * 0.022); // constant is fraction of full rev: was 0.014 -- should be highest that yeilds unchanging count
+	// maxcount = cycle/LIDARDELAY - SKIPLAST;
+	maxcount = (cycle-HEADERGAP)/readInterval;
 	photoUnblockedCheckInterval = cycle/2;
-	parkTime = (float)rpm/60.0 * cycle * PARKRATIO;
-	scanHeaderTimeOffset = cycle * HEADEROFFSETRATIO;
+	parkTime = (float)rpm/PARKINGSPEED * cycle * parkRatio;
+	scanHeaderTimeOffset = cycle * headerOffsetRatio;
 	
+	if (motorspinning) changeSpeed();
 	// Serial.println(maxcount);
+}
+
+void updateHeaderOffset() {
+	int a = buffer[1];
+	int b = buffer[2]; 
+	int c = 0;
+    c = (c << 8) + b;
+    c = (c << 8) + a;
+    float d = c/10.0;
+    headerOffsetRatio = d/360.0; 
+    setRPM(rpm);
+}
+
+void updateParkRatio() {
+	int a = buffer[1];
+	int b = buffer[2]; 
+	int c = 0;
+    c = (c << 8) + b;
+    c = (c << 8) + a;
+    float d = c/10.0;
+    parkRatio = d/360.0; 
+    setRPM(rpm);
+}
+
+void updateReadInterval() {
+	int a = buffer[1];
+	int b = buffer[2]; 
+	readInterval = 0;
+    readInterval = (readInterval << 8) + b;
+    readInterval = (readInterval << 8) + a;
+    setRPM(rpm);
 }
 
 void toggleVerbose() {
@@ -584,6 +593,10 @@ void toggleVerbose() {
 	}
 }
 
+void boardID() {
+	Serial.println("<id::xaxxonopenlidar>");
+}
+
 void version() {
-	Serial.println("<version:0.948>"); 
+	Serial.println("<version:1.12>"); 
 }
