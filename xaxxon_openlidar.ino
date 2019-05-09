@@ -215,7 +215,7 @@ void parseCommand(){
 	else if(buffer[0] == 'n') lidarBroadcast = false;
 	else if(buffer[0] == 'm') {
 		if (!lidarenabled) lidarEnable();
-		Serial.println(myLidarLite.distance()); // TODO: why doesn't this work?
+		Serial.println(myLidarLite.distance()); // TODO: buggy?
 	}
 	
 	else if(buffer[0] == 'h') lasthostresponse = time;
@@ -327,9 +327,6 @@ void readLidar() {
 		if (count == maxcount && DOBIASCORRECTION) biascorrection=true; 
 		
 		lidarReadyTime = time + readInterval;	
-		// if (count==BIASCORRECTIONCOUNT)  distanceMeasureStart(true); // recommended periodically
-		// if (count==0)  distanceMeasureStart(true); // recommended periodically CAUSES SERIOUS LAG
-		// else 
 		distanceMeasureStart(biascorrection);
 		distanceMeasureStarted = true;
 		
@@ -598,5 +595,5 @@ void boardID() {
 }
 
 void version() {
-	Serial.println("<version:1.12>"); 
+	Serial.println("<version:1.13>"); 
 }
