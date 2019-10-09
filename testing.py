@@ -20,7 +20,7 @@ import time, sys, usbdiscover
 	# print("incorrect board id")
 	# sys.exit(0)
 	
-ser = usbdiscover.usbdiscover("<id::xaxxonlidar>")
+ser = usbdiscover.usbdiscover("<id::xaxxonopenlidar>")
 
 while 1:
 	
