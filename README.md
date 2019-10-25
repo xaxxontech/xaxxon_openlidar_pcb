@@ -12,6 +12,4 @@ ROS Drivers:
 Documentation:
 [ xaxxon.com/documentation/view/xaxxon-openlidar ](http://www.xaxxon.com/documentation/view/xaxxon-openlidar)
 
-Dependency: [ Garmin LIDARLite_Arduino_Library ](https://github.com/garmin/LIDARLite_Arduino_Library)
-
 Flash to board via Arduino IDE as duemilanove/328P
