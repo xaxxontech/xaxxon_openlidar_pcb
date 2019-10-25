@@ -12,7 +12,7 @@ b - lidar broadcast start
 n - lidar broadcast stop
 a - all on (1, b, g)
 f - all off (p, n)
-m - lidar read single
+m - lidar read single // TODO: IMPLEMENT
 x - get ID
 y - get version 
 e - enable host heartbeat check (default)
@@ -23,13 +23,18 @@ k,a,b - set header offset from photo sensor -- 2 byte int units: deci-degrees (1
 i - print header offset ratio
 q,a,b - set park position offset from photo sensor -- 2 byte int units: deci-degrees (1/10 degree)	
 t,a,b - set read interval -- 2 byte int microseconds 
+z - get error count
  
 */
 
-#include <Wire.h>
-#include <LIDARLite.h>
 
-LIDARLite myLidarLite;
+/* 
+ * using non- standard Wire lib 
+ * from PR #107 https://github.com/arduino/ArduinoCore-avr/pull/107
+ */
+#include "src/Wire.h" 
+
+#define LIDARLITE_ADDR_DEFAULT 0x62
 
 // pins
 #define PHOTOPIN	2 
@@ -80,6 +85,7 @@ int distancecm = 0;
 // volatile boolean delayedOutputScanHeader = false;
 volatile unsigned long outputScanHeaderTime = 0; 
 unsigned long scanHeaderTimeOffset = 0;
+int readerrors = 0;
 
 // distance reading 
 byte isBusy = 0;
@@ -146,7 +152,7 @@ void setup() {
 void loop(){
 	time = micros();
 	
-	if (lidarBroadcast) readLidar();
+	if (lidarBroadcast) lidarReadDistance();
 	
 	if (outputScanHeaderTime !=0 && time >= outputScanHeaderTime && lidarBroadcast) {
 		outputScanHeaderTime = 0;
@@ -221,7 +227,7 @@ void parseCommand(){
 	else if(buffer[0] == 'n') lidarBroadcast = false;
 	else if(buffer[0] == 'm') {
 		if (!lidarenabled) lidarEnable();
-		Serial.println(myLidarLite.distance()); // TODO: buggy?
+		// TODO: output single reading
 	}
 	
 	else if(buffer[0] == 'h') lasthostresponse = time;
@@ -239,6 +245,7 @@ void parseCommand(){
 		Serial.println(">");
 	}
 	else if (buffer[0] == 't') updateReadInterval();
+	else if (buffer[0] == 'z') errorreport();
 }
 
 
@@ -254,10 +261,10 @@ void outputDistance() {
 	count ++;
 	
 	if (!verbose) Serial.write(d, 2);
-	else {
-		Serial.print(cm);
-		Serial.print(" ");
-	}
+	// else {
+		// Serial.print(cm);
+		// Serial.print(" ");
+	// }
 	
 }
 
@@ -384,20 +391,43 @@ void lidarEnable() {
 	delay(500);
 	
 	// from https://github.com/garmin/LIDARLite_v3_Arduino_Library/blob/master/examples/ShortRangeHighSpeed/ShortRangeHighSpeed.ino
-	myLidarLite.begin(0, true); // Set configuration to default and I2C to 400 kHz
-	myLidarLite.write(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
-	// myLidarLite.write(0x04, 0b00000100); // Use non-default reference acquisition count
-	// myLidarLite.write(0x12, 0x03); // Reference acquisition count of 3 (default is 5)
-	delay(500); // increased from 200, helps?
+	Wire.begin();
+	Wire.setClock(400000UL);
+	Wire.setTimeoutInMicros(1000);
+	writelidar(0x02, 0x0d); // Maximum acquisition count of 0x0d. (default is 0x80)
+	delay(1);
+	writelidar(0x04,0x08); // Default
+	delay(1);
+	writelidar(0x1c,0x00); // Default
+
+	delay(500); // increased from 200, helps? manual says should only take 22ms...
 	if (verbose) Serial.println("lidar enabled");
 
 	lidarenabled = true;
+}
+
+void writelidar(char address, char value)
+{
+  Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
+  Wire.write((int)address); // Set register for write
+  Wire.write((int)value); // Write myValue to register
+
+  if (Wire.endTransmission() != 0) nack();
+
+  // delay(1); // 1 ms delay for robustness with successive reads and writes
 }
 
 // void lidarDisable() {
 	// digitalWrite(LIDARENABLEPIN, LOW);
 	// lidarenabled = false;
 // }
+
+void nack() {
+	if (verbose) Serial.println("NACK");
+	// distanceMeasureStarted = false;
+	// isBusy = false;
+	readerrors ++;
+}
 
 void enableInterrupts() {
 	attachInterrupt(digitalPinToInterrupt(PHOTOPIN), trackRPM, LOW);
@@ -407,7 +437,7 @@ void disableInterrupts() {
 	detachInterrupt(digitalPinToInterrupt(PHOTOPIN));
 }
 
-void readLidar() {
+void lidarReadDistance() {
 		
 	// start: request lidar data
 	if (!distanceMeasureStarted && !isBusy && time >= lidarReadyTime) { 
@@ -415,7 +445,6 @@ void readLidar() {
 		if (count > maxcount && motorspinning) return; // near complete rev, stop reading 
 		
 		boolean biascorrection = false;
-		// if (time > delayreadtime & motorspinning) return;
 		if (count == maxcount && DOBIASCORRECTION) biascorrection=true; 
 		
 		lidarReadyTime = time + readInterval;	
@@ -443,15 +472,12 @@ void readLidar() {
 void distanceMeasureStart(bool biasCorrection) {
 	
 	// Send measurement command
-	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
-	Wire.write(0X00); // Prepare write to register 0x00
 	if(biasCorrection == true)	{    
-		Wire.write(0X04); // Perform measurement with receiver bias correction
+		writelidar(0x00, 0x04); // Perform measurement with receiver bias correction
 	}
 	else {
-		Wire.write(0X03); // Perform measurement without receiver bias correction
+		writelidar(0x00, 0x03); // Perform measurement without receiver bias correction
 	}
-	Wire.endTransmission();
 	
 	isBusy = 1;
 	loopCount = 0;
@@ -461,9 +487,10 @@ void distanceWait() {
 	// Read status register
 	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
 	Wire.write(0x01);
-	Wire.endTransmission();
+	if (Wire.endTransmission() != 0) nack();
+	
 	Wire.requestFrom(LIDARLITE_ADDR_DEFAULT, 1);
-	isBusy = readIfAvailable();
+	isBusy = Wire.read(); 
 	isBusy = bitRead(isBusy,0); // Take LSB of status register, busy bit
 
 	loopCount++; // Increment loop counter
@@ -481,52 +508,17 @@ int distanceGet() {
 	// Prepare 2 byte read from registers 0x0f and 0x10
 	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
 	Wire.write(0x8f);
-	Wire.endTransmission();
+	if (Wire.endTransmission() != 0) nack();
 
 	// below tested to take 110 micros for both biasCorrection true and false
 	// Perform the read and repack the 2 bytes into 16-bit word
 	Wire.requestFrom(LIDARLITE_ADDR_DEFAULT, 2);
-	distancecm = readIfAvailable();
+	distancecm = Wire.read(); 
 	distancecm <<= 8;
-	distancecm |= readIfAvailable();
+	distancecm |= Wire.read(); 
 	
 }
 
-// TODO: use top 2 lines if unused, may cause noisier scans/affects gmapping
-byte readIfAvailable() {
-	byte b = Wire.read(); 
-	return b;
-	
-	unsigned long m = 0;
-	while (m < 10000) { // 0.1 second timeout
-		if (Wire.available()) {
-			byte b = Wire.read();
-			return b;
-		}
-		delayMicroseconds(1);
-		m ++;
-	}
-	
-	// timed out
-	
-	if (timedout < MAXTIMEOUTS) {
-		// lidarBroadcast = false;
-		// lidarDisable();
-		delay(100);
-		// lidarEnable();
-		// lidarBroadcast = true;
-		timedout ++;
-		if (verbose) Serial.println("timeout");
-		return 0;
-	}
-	
-	else {
-	
-		Serial.println("sensor read max timeouts, stopping");
-		allOff();	
-		return 0;
-	}
-}
 
 void allOn() {
 	lidarEnable();
@@ -603,10 +595,16 @@ void toggleVerbose() {
 	}
 }
 
+void errorreport() {
+	Serial.print("<errors: ");
+	Serial.print(readerrors);
+	Serial.println(">");
+}
+
 void boardID() {
 	Serial.println("<id::xaxxonopenlidar>");
 }
 
 void version() {
-	Serial.println("<version:1.17>"); 
+	Serial.println("<version:1.18>"); 
 }
