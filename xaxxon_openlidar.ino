@@ -23,7 +23,7 @@ k,a,b - set header offset from photo sensor -- 2 byte int units: deci-degrees (1
 i - print header offset ratio
 q,a,b - set park position offset from photo sensor -- 2 byte int units: deci-degrees (1/10 degree)	
 t,a,b - set read interval -- 2 byte int microseconds 
-z - get error count
+z - get i2c_error count
  
 */
 
@@ -85,7 +85,7 @@ int distancecm = 0;
 // volatile boolean delayedOutputScanHeader = false;
 volatile unsigned long outputScanHeaderTime = 0; 
 unsigned long scanHeaderTimeOffset = 0;
-int readerrors = 0;
+int i2c_errors = 0;
 
 // distance reading 
 byte isBusy = 0;
@@ -139,9 +139,6 @@ void setup() {
 	Serial.begin(115200);
 	
 	setRPM(rpm); // defines cycle
-	
-	// delay(10000);
-	// lidarEnable();
 	
 	lasthostresponse = micros();
 
@@ -245,7 +242,7 @@ void parseCommand(){
 		Serial.println(">");
 	}
 	else if (buffer[0] == 't') updateReadInterval();
-	else if (buffer[0] == 'z') errorreport();
+	else if (buffer[0] == 'z') i2cerrorreport();
 }
 
 
@@ -383,6 +380,14 @@ void stop() {
 	safetyStopTime = 0;
 }
 
+void enableInterrupts() {
+	attachInterrupt(digitalPinToInterrupt(PHOTOPIN), trackRPM, LOW);
+}
+
+void disableInterrupts() {
+	detachInterrupt(digitalPinToInterrupt(PHOTOPIN));
+}
+
 void lidarEnable() {
 	if (lidarenabled) return;
 	
@@ -406,35 +411,26 @@ void lidarEnable() {
 	lidarenabled = true;
 }
 
-void writelidar(char address, char value)
+void writelidar(int address) {
+	writelidar(address, -1);
+}
+
+boolean writelidar(int address, int value)
 {
-  Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
-  Wire.write((int)address); // Set register for write
-  Wire.write((int)value); // Write myValue to register
+	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
+	Wire.write(address); // Set register for write
+	if (value != -1)  Wire.write(value); // Write myValue to register
 
-  if (Wire.endTransmission() != 0) nack();
-
-  // delay(1); // 1 ms delay for robustness with successive reads and writes
-}
-
-// void lidarDisable() {
-	// digitalWrite(LIDARENABLEPIN, LOW);
-	// lidarenabled = false;
-// }
-
-void nack() {
-	if (verbose) Serial.println("NACK");
-	// distanceMeasureStarted = false;
-	// isBusy = false;
-	readerrors ++;
-}
-
-void enableInterrupts() {
-	attachInterrupt(digitalPinToInterrupt(PHOTOPIN), trackRPM, LOW);
-}
-
-void disableInterrupts() {
-	detachInterrupt(digitalPinToInterrupt(PHOTOPIN));
+	if (Wire.endTransmission() != 0) {
+		if (verbose) Serial.println("NACK");
+		i2c_errors ++;
+		return false;
+	}
+	
+	return true;
+	
+	// if (value != -1) 
+		// delayMicroseconds(50); // testing
 }
 
 void lidarReadDistance() {
@@ -448,9 +444,8 @@ void lidarReadDistance() {
 		if (count == maxcount && DOBIASCORRECTION) biascorrection=true; 
 		
 		lidarReadyTime = time + readInterval;	
-		distanceMeasureStart(biascorrection);
-		distanceMeasureStarted = true;
-		
+		if (distanceMeasureStart(biascorrection))
+			distanceMeasureStarted = true;
 	}
 	
 	// wait
@@ -469,25 +464,35 @@ void lidarReadDistance() {
 	
 }	
 
-void distanceMeasureStart(bool biasCorrection) {
+boolean distanceMeasureStart(bool biasCorrection) {
+	
+	boolean started = false;
 	
 	// Send measurement command
 	if(biasCorrection == true)	{    
-		writelidar(0x00, 0x04); // Perform measurement with receiver bias correction
+		if (writelidar(0x00, 0x04))  // Perform measurement with receiver bias correction
+			started = true;
 	}
 	else {
-		writelidar(0x00, 0x03); // Perform measurement without receiver bias correction
+		if (writelidar(0x00, 0x03)) // Perform measurement without receiver bias correction
+			started = true;
 	}
 	
-	isBusy = 1;
-	loopCount = 0;
+	if (started) {
+		isBusy = 1;
+		loopCount = 0;
+	}
+	
+	return started;
 }
 
 void distanceWait() {
 	// Read status register
-	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
-	Wire.write(0x01);
-	if (Wire.endTransmission() != 0) nack();
+	// Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
+	// Wire.write(0x01);
+	// if (Wire.endTransmission() != 0) nack();
+	
+	writelidar(0x01);
 	
 	Wire.requestFrom(LIDARLITE_ADDR_DEFAULT, 1);
 	isBusy = Wire.read(); 
@@ -506,9 +511,11 @@ int distanceGet() {
 	// Immediately read previous distance measurement data. This is valid until the next measurement finishes.
 	// The I2C transaction finishes before new distance measurement data is acquired.
 	// Prepare 2 byte read from registers 0x0f and 0x10
-	Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
-	Wire.write(0x8f);
-	if (Wire.endTransmission() != 0) nack();
+	// Wire.beginTransmission(LIDARLITE_ADDR_DEFAULT);
+	// Wire.write(0x8f);
+	// if (Wire.endTransmission() != 0) nack();
+	
+	writelidar(0x8f);
 
 	// below tested to take 110 micros for both biasCorrection true and false
 	// Perform the read and repack the 2 bytes into 16-bit word
@@ -595,9 +602,9 @@ void toggleVerbose() {
 	}
 }
 
-void errorreport() {
-	Serial.print("<errors: ");
-	Serial.print(readerrors);
+void i2cerrorreport() {
+	Serial.print("<i2c_errors: ");
+	Serial.print(i2c_errors);
 	Serial.println(">");
 }
 
@@ -606,5 +613,5 @@ void boardID() {
 }
 
 void version() {
-	Serial.println("<version:1.18>"); 
+	Serial.println("<version:1.185>"); 
 }
