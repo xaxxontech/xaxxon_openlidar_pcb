@@ -411,8 +411,8 @@ void lidarEnable() {
 	lidarenabled = true;
 }
 
-void writelidar(int address) {
-	writelidar(address, -1);
+boolean writelidar(int address) {
+	return writelidar(address, -1);
 }
 
 boolean writelidar(int address, int value)
@@ -492,7 +492,11 @@ void distanceWait() {
 	// Wire.write(0x01);
 	// if (Wire.endTransmission() != 0) nack();
 	
-	writelidar(0x01);
+	if (!writelidar(0x01)) {
+		distanceMeasureStarted = false;
+		isBusy = 0;
+		return;
+	} 
 	
 	Wire.requestFrom(LIDARLITE_ADDR_DEFAULT, 1);
 	isBusy = Wire.read(); 
@@ -502,6 +506,7 @@ void distanceWait() {
 	// Stop status register polling if stuck in loop
 	if(loopCount > 9999) {
 		Serial.println("loopCount > 9999");
+		distanceMeasureStarted = false;
 		isBusy = 0;
 	}
 }
@@ -515,7 +520,10 @@ int distanceGet() {
 	// Wire.write(0x8f);
 	// if (Wire.endTransmission() != 0) nack();
 	
-	writelidar(0x8f);
+	if (!writelidar(0x8f)) {
+		distancecm = 0;
+		return;
+	}
 
 	// below tested to take 110 micros for both biasCorrection true and false
 	// Perform the read and repack the 2 bytes into 16-bit word
@@ -613,5 +621,5 @@ void boardID() {
 }
 
 void version() {
-	Serial.println("<version:1.185>"); 
+	Serial.println("<version:1.186>"); 
 }
