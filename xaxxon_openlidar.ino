@@ -8,6 +8,7 @@ p - motor stop facing forward
 r,a - set motor rpm (0-255, not 10 or 13)
 d,a - set motor direction (1,0) default=1 CW/RHR+ if motor on bottom
 1 - lidar enable 
+0 - lidar disable
 b - lidar broadcast start
 n - lidar broadcast stop
 a - all on (1, b, g)
@@ -149,7 +150,7 @@ void setup() {
 void loop(){
 	time = micros();
 	
-	if (lidarBroadcast) lidarReadDistance();
+	if (lidarBroadcast && lidarenabled) lidarReadDistance();
 	
 	if (outputScanHeaderTime !=0 && time >= outputScanHeaderTime && lidarBroadcast) {
 		outputScanHeaderTime = 0;
@@ -215,7 +216,7 @@ void parseCommand(){
 	else if (buffer[0] == 'd') digitalWrite(DIRPIN, buffer[1]); // 0 or 1 (default 1) 1=CW/RHR+ if motor on bottom
 	
 	else if (buffer[0] == '1') { lidarEnable(); }
-	// else if (buffer[0] == '0') { lidarDisable(); }
+	else if (buffer[0] == '0') { lidarDisable(); }
 
 	else if(buffer[0] == 'x') boardID();
 	else if(buffer[0] == 'y') version();
@@ -409,6 +410,14 @@ void lidarEnable() {
 	if (verbose) Serial.println("lidar enabled");
 
 	lidarenabled = true;
+}
+
+void lidarDisable() {
+	digitalWrite(LIDARENABLEPIN, LOW); // must be 1st! (didn't matter before due to mosfet speed?)
+	// digitalWrite(LIDARMOSFET, LOW);
+	delay(500);
+	
+	lidarenabled = false;
 }
 
 boolean writelidar(int address) {
@@ -621,5 +630,5 @@ void boardID() {
 }
 
 void version() {
-	Serial.println("<version:1.186>"); 
+	Serial.println("<version:1.1881>"); 
 }
