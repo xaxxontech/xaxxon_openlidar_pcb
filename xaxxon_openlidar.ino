@@ -13,7 +13,7 @@ b - lidar broadcast start
 n - lidar broadcast stop
 a - all on (1, b, g)
 f - all off (p, n)
-m - lidar read single // TODO: IMPLEMENT
+m - lidar read single  
 x - get ID
 y - get version 
 e - enable host heartbeat check (default)
@@ -223,10 +223,7 @@ void parseCommand(){
 		
 	else if(buffer[0] == 'b') lidarBroadcast = true;
 	else if(buffer[0] == 'n') lidarBroadcast = false;
-	else if(buffer[0] == 'm') {
-		if (!lidarenabled) lidarEnable();
-		// TODO: output single reading
-	}
+	else if(buffer[0] == 'm') lidarReadSingle();
 	
 	else if(buffer[0] == 'h') lasthostresponse = time;
 	else if (buffer[0] == 'v') toggleVerbose();
@@ -442,6 +439,18 @@ boolean writelidar(int address, int value)
 		// delayMicroseconds(50); // testing
 }
 
+void lidarReadSingle() {
+	
+	if (!lidarenabled) lidarEnable();
+	
+	distanceMeasureStart(false);
+	delayMicroseconds(readInterval);
+	distanceGet();  			
+	
+	Serial.println(distancecm);
+
+}
+
 void lidarReadDistance() {
 		
 	// start: request lidar data
@@ -630,5 +639,5 @@ void boardID() {
 }
 
 void version() {
-	Serial.println("<version:1.1881>"); 
+	Serial.println("<version:1.189>"); 
 }
