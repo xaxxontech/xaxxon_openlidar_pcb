@@ -25,6 +25,7 @@ i - print header offset ratio
 q,a,b - set park position offset from photo sensor -- 2 byte int units: deci-degrees (1/10 degree)	
 t,a,b - set read interval -- 2 byte int microseconds 
 z - get i2c_error count
+j - toggle photo sensor test mode
  
 */
 
@@ -106,6 +107,9 @@ boolean heartbeatenabled = true;
 unsigned long lasthostresponse = 0;
 const unsigned long HOSTTIMEOUT = 10000000; // 10 sec
 
+// photo sensor test
+boolean phototestmode = false;
+
 volatile unsigned long time = 0;
 boolean verbose = false;
 
@@ -182,6 +186,8 @@ void loop(){
 		}
 	}
 	
+	if (phototestmode) Serial.println("");
+	
 	if( Serial.available() > 0) {
 		manageCommand();
 	}
@@ -241,6 +247,7 @@ void parseCommand(){
 	}
 	else if (buffer[0] == 't') updateReadInterval();
 	else if (buffer[0] == 'z') i2cerrorreport();
+	else if (buffer[0] == 'j') photoSensorTest();
 }
 
 
@@ -526,6 +533,7 @@ void distanceWait() {
 		Serial.println("loopCount > 9999");
 		distanceMeasureStarted = false;
 		isBusy = 0;
+		i2c_errors += 1;
 	}
 }
 
@@ -632,6 +640,29 @@ void i2cerrorreport() {
 	Serial.print("<i2c_errors: ");
 	Serial.print(i2c_errors);
 	Serial.println(">");
+	i2c_errors = 0;
+}
+
+void photoSensorTest() {
+	if (!verbose) {
+		Serial.println("verbose required, dropped");
+		return;
+	}
+	
+	if (phototestmode) {
+		phototestmode = false;
+		disableInterrupts();
+		Serial.println("photo sensor test mode OFF");
+	}
+	else  {
+		phototestmode = true;
+		attachInterrupt(digitalPinToInterrupt(PHOTOPIN), photoSensorTestBlocked, LOW);
+		Serial.println("photo sensor test mode ON");
+	}
+}
+
+void photoSensorTestBlocked() {
+	Serial.println("photo sensor BLOCKED");
 }
 
 void boardID() {
@@ -639,5 +670,5 @@ void boardID() {
 }
 
 void version() {
-	Serial.println("<version:1.189>"); 
+	Serial.println("<version:1.191>"); 
 }
